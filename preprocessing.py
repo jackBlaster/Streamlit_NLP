@@ -1,41 +1,102 @@
+import re
 import pandas as pd
-from deep_translator import GoogleTranslator
+from symspellpy import SymSpell, Verbosity
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+from nltk.corpus import stopwords
+import nltk
 
-def preprocess_data(df):
+# Téléchargement des stopwords pour NLTK
+nltk.download('stopwords')
+
+# Initialisation de SymSpell
+sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
+sym_spell.load_dictionary("frequency_dictionary_en_82_765.txt", term_index=0, count_index=1)
+
+# 1. Nettoyage des textes
+def clean_text(text):
     """
-    Fonction de prétraitement des données.
-    Remplit les valeurs manquantes, traduit les avis en anglais et supprime les doublons.
-
-    Paramètres :
-        df (pd.DataFrame) : Le DataFrame contenant les données.
-
-    Retourne :
-        pd.DataFrame : Le DataFrame prétraité.
+    Nettoie le texte en supprimant les espaces, les ponctuations et en mettant en minuscules.
     """
-    # Remplir les valeurs manquantes dans la colonne 'auteur'
-    df['auteur'] = df['auteur'].fillna('Inconnu')
+    text = text.strip()
+    text = text.lower()
+    text = re.sub(r'[^\w\s]', '', text)  # Supprime la ponctuation
+    return text
 
-    # Supprimer les lignes où la colonne 'note' est null
-    df = df.dropna(subset=['note'])
+# 2. Correction orthographique
+def correct_spelling_fast(text):
+    """
+    Corrige l'orthographe d'un texte en anglais en utilisant SymSpell.
+    """
+    words = text.split()
+    corrected_words = []
+    for word in words:
+        # Utilisation de SymSpell pour corriger chaque mot
+        correction = sym_spell.lookup(word, Verbosity.CLOSEST, max_edit_distance=2)
+        corrected_words.append(correction[0].term if correction else word)
+    return ' '.join(corrected_words)
 
-    # Filtrer les lignes avec des avis_en nulls
-    avis_to_translate = df[df['avis_en'].isnull()]
+# 3. Extraction des mots fréquents
+def frequent_words(df, column, lang='en', ngram_range=(1, 1), top_n=10):
+    """
+    Extrait les mots ou n-grammes les plus fréquents dans une colonne de texte.
+    """
+    if lang == 'en':
+        stop_words = stopwords.words('english')
+    else:
+        stop_words = None
 
-    # Fonction pour traduire un avis en français vers l'anglais
-    def translate_avis(avis):
-        return GoogleTranslator(source='fr', target='en').translate(avis)
+    vectorizer = CountVectorizer(stop_words=stop_words, ngram_range=ngram_range)
+    X = vectorizer.fit_transform(df[column])
 
-    # Traduire les avis en français vers l'anglais pour les lignes avec avis_en nulls
-    df.loc[df['avis_en'].isnull(), 'avis_en'] = avis_to_translate['avis'].apply(translate_avis)
+    word_freq = X.sum(axis=0).A1
+    words = vectorizer.get_feature_names_out()
+    word_freq_dict = dict(zip(words, word_freq))
 
-    # Supprimer les doublons
-    duplicates_count = df.duplicated().sum()
-    print(f"Nombre de doublons dans le DataFrame : {duplicates_count}")
-    df = df.drop_duplicates()
+    # Retourner les n mots les plus fréquents
+    sorted_words = sorted(word_freq_dict.items(), key=lambda x: x[1], reverse=True)
+    return sorted_words[:top_n]
 
-    return df
+# 4. Topic modeling avec LDA
+def topic_modeling(df, column, n_topics=5):
+    """
+    Applique le topic modeling (LDA) sur une colonne de texte et génère des noms pour les sujets.
+    """
+    vectorizer = CountVectorizer(stop_words='english')
+    X = vectorizer.fit_transform(df[column])
+    lda = LatentDirichletAllocation(n_components=n_topics, random_state=42)
+    lda.fit(X)
 
-# Exemple d'utilisation
-# df = pd.read_csv('votre_fichier.csv')
-# df = preprocess_data(df)
-# df.to_csv('fichier_pretraite.csv', index=False)
+    terms = vectorizer.get_feature_names_out()
+
+    def get_topic_name(topic_idx):
+        topic_words = lda.components_[topic_idx]
+        sorted_word_idx = topic_words.argsort()[-10:]
+        topic_keywords = [terms[i] for i in sorted_word_idx]
+        return " ".join(topic_keywords[:3])
+
+    for idx, topic in enumerate(lda.components_):
+        topic_name = get_topic_name(idx)
+        print(f"Topic {idx + 1} ({topic_name}):")
+        print([terms[i] for i in topic.argsort()[-10:]])
+        print()
+
+    return lda
+
+# 5. Pipeline principal
+if __name__ == "__main__":
+    # Charger le dataset
+    df = pd.read_csv("data.csv")  # Remplacez par le chemin de votre fichier CSV
+
+    # Nettoyage et correction orthographique
+    df['avis_cor_en'] = df['avis_en'].apply(lambda x: correct_spelling_fast(clean_text(x)))
+
+    # Sauvegarder les résultats de nettoyage
+    df.to_csv('avis_corriges.csv', index=False)
+
+    # Extraction des mots fréquents
+    top_10_words_en = frequent_words(df, 'avis_cor_en', lang='en', ngram_range=(1, 1), top_n=10)
+    print("Top 10 frequent words in English:", top_10_words_en)
+
+    # Topic modeling
+    lda_model = topic_modeling(df, 'avis_cor_en', n_topics=5)
