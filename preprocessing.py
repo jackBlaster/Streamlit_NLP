@@ -11,7 +11,7 @@ nltk.download('stopwords')
 
 # Initialisation de SymSpell
 sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
-sym_spell.load_dictionary("frequency_dictionary_en_82_765.txt", term_index=0, count_index=1)
+sym_spell.load_dictionary("./dictionaries/frequency_dictionary_en_82_765.txt", term_index=0, count_index=1)
 
 # 1. Nettoyage des textes
 def clean_text(text):
@@ -68,7 +68,7 @@ def topic_modeling(df, column, n_topics=5):
     lda.fit(X)
 
     terms = vectorizer.get_feature_names_out()
-
+    """
     def get_topic_name(topic_idx):
         topic_words = lda.components_[topic_idx]
         sorted_word_idx = topic_words.argsort()[-10:]
@@ -76,12 +76,13 @@ def topic_modeling(df, column, n_topics=5):
         return " ".join(topic_keywords[:3])
 
     for idx, topic in enumerate(lda.components_):
-        topic_name = get_topic_name(idx)
-        print(f"Topic {idx + 1} ({topic_name}):")
+        #topic_name = get_topic_name(idx)
+        #print(f"Topic {idx + 1} ({topic_name}):")
+        print(f"Topic {idx + 1} :")
         print([terms[i] for i in topic.argsort()[-10:]])
         print()
-
-    return lda
+    """
+    return lda, terms
 
 # 5. Pipeline principal
 if __name__ == "__main__":
